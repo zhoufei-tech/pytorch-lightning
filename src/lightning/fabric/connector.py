@@ -23,6 +23,7 @@ from lightning.fabric.accelerators import ACCELERATOR_REGISTRY
 from lightning.fabric.accelerators.accelerator import Accelerator
 from lightning.fabric.accelerators.cuda import CUDAAccelerator
 from lightning.fabric.accelerators.mps import MPSAccelerator
+from lightning.fabric.accelerators.torch_accelerator import TorchAccelerator
 from lightning.fabric.accelerators.xla import XLAAccelerator
 from lightning.fabric.plugins import (
     BitsandbytesPrecision,
@@ -322,6 +323,8 @@ class _Connector:
             return "mps"
         if CUDAAccelerator.is_available():
             return "cuda"
+        if TorchAccelerator.is_available():
+            return TorchAccelerator.name()
         return "cpu"
 
     @staticmethod
@@ -404,6 +407,9 @@ class _Connector:
                 isinstance(self._accelerator_flag, str) and self._accelerator_flag in ("cuda", "gpu", "mps")
             ):
                 device = _determine_root_gpu_device(self._parallel_devices)
+            elif _first_accelerator_device(self._parallel_devices) is not None:
+                # any other accelerator that reports its devices as `torch.device`s (e.g. `TorchAccelerator`)
+                device = _first_accelerator_device(self._parallel_devices)
             else:
                 device = "cpu"
             # TODO: lazy initialized device, then here could be self._strategy_flag = "single_device"
@@ -430,12 +436,14 @@ class _Connector:
                 f"You selected `Fabric(strategy='{strategy_flag}')` but process forking is not supported on this"
                 f" platform. We recommend `Fabric(strategy='ddp_spawn')` instead."
             )
-        if (
-            strategy_flag in _FSDP_ALIASES or type(self._strategy_flag) is FSDPStrategy
-        ) and self._accelerator_flag not in ("cuda", "gpu"):
+        if (strategy_flag in _FSDP_ALIASES or type(self._strategy_flag) is FSDPStrategy) and not (
+            self._accelerator_flag in ("cuda", "gpu")
+            or isinstance(self._accelerator_flag, (CUDAAccelerator, TorchAccelerator))
+            or _is_registered_subclass(self._accelerator_flag, TorchAccelerator)
+        ):
             raise ValueError(
-                "You selected the FSDP strategy but FSDP is only available on GPU. Set `Fabric(accelerator='gpu', ...)`"
-                " to continue or select a different strategy."
+                "You selected the FSDP strategy but FSDP is only available on GPU (or another PyTorch accelerator). Set"
+                " `Fabric(accelerator='gpu', ...)` to continue or select a different strategy."
             )
         if strategy_flag:
             self._strategy_flag = strategy_flag
@@ -448,6 +456,13 @@ class _Connector:
             self.strategy = STRATEGY_REGISTRY.get(self._strategy_flag)
         else:
             self.strategy = self._strategy_flag
+
+    def _autocast_device_type(self) -> str:
+        """The device type for ``torch.autocast``, taken from the devices the accelerator runs on."""
+        device = _first_accelerator_device(self._parallel_devices)
+        if device is not None:
+            return device.type
+        return self._accelerator_flag if self._accelerator_flag in ("cpu", "mps") else "cuda"
 
     def _check_and_init_precision(self) -> Precision:
         if isinstance(self._precision_instance, Precision):
@@ -492,8 +507,7 @@ class _Connector:
                 if self._precision_input == "16-mixed"
                 else "Using bfloat16 Automatic Mixed Precision (AMP)"
             )
-            device = self._accelerator_flag if self._accelerator_flag in ("cpu", "mps") else "cuda"
-            return MixedPrecision(precision=self._precision_input, device=device)
+            return MixedPrecision(precision=self._precision_input, device=self._autocast_device_type())
 
         raise RuntimeError("No precision set")
 
@@ -578,3 +592,17 @@ def _convert_precision_to_unified_args(precision: Optional[_PRECISION_INPUT]) ->
 
 def _is_using_cli() -> bool:
     return bool(int(os.environ.get("LT_CLI_USED", "0")))
+
+
+def _first_accelerator_device(parallel_devices: Optional[list]) -> Optional[torch.device]:
+    """The first parallel device if it is a non-CPU ``torch.device``, otherwise ``None``."""
+    if parallel_devices and isinstance(parallel_devices[0], torch.device) and parallel_devices[0].type != "cpu":
+        return parallel_devices[0]
+    return None
+
+
+def _is_registered_subclass(accelerator_flag: Union[str, Accelerator], cls: type) -> bool:
+    """Whether ``accelerator_flag`` names a registered accelerator that subclasses ``cls``."""
+    if not isinstance(accelerator_flag, str) or accelerator_flag not in ACCELERATOR_REGISTRY:
+        return False
+    return issubclass(ACCELERATOR_REGISTRY[accelerator_flag]["accelerator"], cls)

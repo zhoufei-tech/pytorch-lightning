@@ -29,7 +29,8 @@ from lightning.pytorch.accelerators.accelerator import Accelerator
 from lightning.pytorch.accelerators.cpu import CPUAccelerator
 from lightning.pytorch.accelerators.cuda import CUDAAccelerator
 from lightning.pytorch.accelerators.mps import MPSAccelerator
-from lightning.pytorch.accelerators.npu import NPUAccelerator
+from lightning.pytorch.accelerators.npu import NPUAccelerator  # noqa: F401
+from lightning.pytorch.accelerators.torch_accelerator import TorchAccelerator  # noqa: F401
 from lightning.pytorch.accelerators.xla import XLAAccelerator
 
 AcceleratorRegistry = _AcceleratorRegistry()

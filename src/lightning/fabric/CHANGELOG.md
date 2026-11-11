@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 - Added support for remote storage (fsspec URLs) in checkpoint consolidation (`python -m lightning.fabric.utilities.consolidate_checkpoint` and the `lightning consolidate` CLI) ([#21826](https://github.com/Lightning-AI/pytorch-lightning/pull/21826))
 
+- Added `TorchAccelerator` (`accelerator="torch_accelerator"`, also picked by `accelerator="auto"`), a device-agnostic accelerator for out-of-tree PyTorch backends that integrate with `torch.accelerator` and register a `torch.distributed` backend ([#22138](https://github.com/Lightning-AI/pytorch-lightning/pull/22138))
+
 ### Changed
 
 -
@@ -25,6 +27,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 - Removed dead code paths for PyTorch below 2.6 ([#21870](https://github.com/Lightning-AI/pytorch-lightning/pull/21870))
 
 ### Fixed
+
+- Fixed `DDPStrategy` calling `torch.cuda` stream APIs for non-CUDA devices; the DDP init stream now comes from the device's module ([#22138](https://github.com/Lightning-AI/pytorch-lightning/pull/22138))
+
+- Fixed `Fabric(accelerator=<custom accelerator>, devices=1)` placing the model on CPU instead of the accelerator's device, and mixed precision using `cuda` autocast for non-CUDA accelerators ([#22138](https://github.com/Lightning-AI/pytorch-lightning/pull/22138))
 
 - Fixed type checking for the `BitsandbytesPrecision` plugin and raised the supported `bitsandbytes` ceiling to `<0.50` (compatible with 0.48/0.49) ([#21858](https://github.com/Lightning-AI/pytorch-lightning/pull/21858))
 

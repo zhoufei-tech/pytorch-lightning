@@ -5,7 +5,7 @@ import os
 import signal
 import time
 from collections.abc import Iterable, Iterator, Sized
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union
@@ -303,11 +303,45 @@ def _destroy_dist_connection() -> None:
 
 
 def _get_default_process_group_backend_for_device(device: torch.device) -> str:
-    """Return corresponding distributed backend for a given device."""
+    """Return corresponding distributed backend for a given device.
+
+    Uses the device-to-backend map maintained by ``torch.distributed``. Out-of-tree backends add themselves to it when
+    they call ``torch.distributed.Backend.register_backend(..., devices=[...])`` (e.g. ``npu`` -> ``hccl``).
+
+    """
     device_backend_map = torch.distributed.Backend.default_device_backend_map
     if device.type in device_backend_map:
         return device_backend_map[device.type]
     return "gloo"
+
+
+def _ddp_init_stream_context(device: torch.device) -> AbstractContextManager:
+    """The stream context in which ``DistributedDataParallel`` should be constructed for ``device``.
+
+    DDP is initialized on the device's default stream to avoid AccumulateGrad stream mismatch warnings. If the device
+    is currently capturing a graph (e.g. CUDA graph whole-network capture), DDP must be initialized on a side stream
+    instead. All device-specific calls go through the device module registered with PyTorch
+    (``torch.get_device_module``), so any backend that implements the standard stream API works, including out-of-tree
+    ``PrivateUse1`` backends.
+
+    """
+    if device.type == "cpu":
+        return nullcontext()
+    try:
+        module = torch.get_device_module(device.type)
+    except RuntimeError:
+        return nullcontext()
+    if not (hasattr(module, "stream") and hasattr(module, "default_stream")):
+        return nullcontext()
+    is_capturing = getattr(module, "is_current_stream_capturing", None)
+    if callable(is_capturing) and is_capturing():
+        # DDP must be initialized on a side-stream for whole-network graph capture.
+        # The resulting AccumulateGrad stream mismatch is intentional in this case.
+        # See: https://pytorch.org/docs/stable/notes/cuda.html#id5
+        torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False)
+        return module.stream(module.Stream())
+    # Default stream avoids AccumulateGrad stream mismatch warnings during normal training.
+    return module.stream(module.default_stream())
 
 
 class _DatasetSamplerWrapper(Dataset):

@@ -26,6 +26,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 - Added support for remote storage (fsspec URLs) when saving and loading distributed checkpoints with `ModelParallelStrategy` ([#21797](https://github.com/Lightning-AI/pytorch-lightning/issues/21797))
 
+- Added `TorchAccelerator` (`accelerator="torch_accelerator"`, also picked by `accelerator="auto"`), a device-agnostic accelerator for out-of-tree PyTorch backends that integrate with `torch.accelerator` and register a `torch.distributed` backend ([#22138](https://github.com/Lightning-AI/pytorch-lightning/pull/22138))
+
+- Added `NPUAccelerator` (`accelerator="npu"`) for Ascend NPUs, built on `TorchAccelerator` ([#22138](https://github.com/Lightning-AI/pytorch-lightning/pull/22138))
+
 ### Changed
 
 - Changed the `dirpath` argument of `lightning.pytorch.profilers` profilers to accept `str | os.PathLike[str]` instead of `str | pathlib.Path` ([#21871](https://github.com/Lightning-AI/pytorch-lightning/pull/21871))
@@ -35,6 +39,12 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 - Removed dead code paths for PyTorch below 2.6 ([#21870](https://github.com/Lightning-AI/pytorch-lightning/pull/21870))
 
 ### Fixed
+
+- Fixed `DDPStrategy` calling `torch.cuda` stream APIs for non-CUDA devices; the DDP init stream now comes from the device's module ([#22138](https://github.com/Lightning-AI/pytorch-lightning/pull/22138))
+
+- Fixed `Trainer(accelerator=<custom accelerator>, devices=1)` placing the model on CPU instead of the accelerator's device ([#22138](https://github.com/Lightning-AI/pytorch-lightning/pull/22138))
+
+- Fixed mixed precision using `cuda` autocast for non-CUDA accelerators ([#22138](https://github.com/Lightning-AI/pytorch-lightning/pull/22138))
 
 - Fixed `LightningCLI` emitting `jsonargparse` deprecation warnings ([#21900](https://github.com/Lightning-AI/pytorch-lightning/issues/21900))
 

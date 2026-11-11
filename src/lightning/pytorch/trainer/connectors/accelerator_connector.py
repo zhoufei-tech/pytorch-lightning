@@ -35,7 +35,7 @@ from lightning.pytorch.accelerators import AcceleratorRegistry
 from lightning.pytorch.accelerators.accelerator import Accelerator
 from lightning.pytorch.accelerators.cuda import CUDAAccelerator
 from lightning.pytorch.accelerators.mps import MPSAccelerator
-from lightning.pytorch.accelerators.npu import NPUAccelerator
+from lightning.pytorch.accelerators.torch_accelerator import TorchAccelerator
 from lightning.pytorch.accelerators.xla import XLAAccelerator
 from lightning.pytorch.plugins import (
     _PLUGIN_INPUT,
@@ -411,9 +411,12 @@ class _AcceleratorConnector:
             return "ddp"
         if len(self._parallel_devices) <= 1:
             if isinstance(self._accelerator_flag, (CUDAAccelerator, MPSAccelerator)) or (
-                isinstance(self._accelerator_flag, str) and self._accelerator_flag in ("cuda", "gpu", "mps","npu")
+                isinstance(self._accelerator_flag, str) and self._accelerator_flag in ("cuda", "gpu", "mps")
             ):
                 device = _determine_root_gpu_device(self._parallel_devices)
+            elif _first_accelerator_device(self._parallel_devices) is not None:
+                # any other accelerator that reports its devices as `torch.device`s (e.g. `TorchAccelerator`)
+                device = _first_accelerator_device(self._parallel_devices)
             else:
                 device = "cpu"
             # TODO: lazy initialized device, then here could be self._strategy_flag = "single_device"
@@ -431,11 +434,16 @@ class _AcceleratorConnector:
 
         if (
             strategy_flag in FSDPStrategy.get_registered_strategies() or type(self._strategy_flag) is FSDPStrategy
-        ) and not (self._accelerator_flag in ("cuda", "gpu","npu") or isinstance(self._accelerator_flag,(CUDAAccelerator,NPUAccelerator))):
+        ) and not (
+            self._accelerator_flag in ("cuda", "gpu")
+            or isinstance(self._accelerator_flag, (CUDAAccelerator, TorchAccelerator))
+            or _is_registered_subclass(self._accelerator_flag, TorchAccelerator)
+        ):
             raise ValueError(
-                f"The strategy `{FSDPStrategy.strategy_name}` requires a GPU accelerator or NPU accelerator, but received "
-                f"`accelerator={self._accelerator_flag!r}`. Please set `accelerator='cuda'`, `accelerator='gpu or npu'`,"
-                " or pass a `CUDAAccelerator() or NPUAcceleraror()` instance to use FSDP."
+                f"The strategy `{FSDPStrategy.strategy_name}` requires a GPU accelerator (or another PyTorch"
+                f" accelerator), but received `accelerator={self._accelerator_flag!r}`. Please set"
+                " `accelerator='cuda'`, `accelerator='gpu'`, or pass a `CUDAAccelerator()` or `TorchAccelerator()`"
+                " instance to use FSDP."
             )
         if strategy_flag in _DDP_FORK_ALIASES and "fork" not in torch.multiprocessing.get_all_start_methods():
             raise ValueError(
@@ -453,6 +461,13 @@ class _AcceleratorConnector:
             self.strategy = StrategyRegistry.get(self._strategy_flag)
         else:
             self.strategy = self._strategy_flag
+
+    def _autocast_device_type(self) -> str:
+        """The device type for ``torch.autocast``, taken from the devices the accelerator runs on."""
+        device = _first_accelerator_device(self._parallel_devices)
+        if device is not None:
+            return device.type
+        return self._accelerator_flag if self._accelerator_flag in ("cpu", "mps") else "cuda"
 
     def _check_and_init_precision(self) -> Precision:
         self._validate_precision_choice()
@@ -487,8 +502,7 @@ class _AcceleratorConnector:
             rank_zero_info(
                 f"Using {'16bit' if self._precision_flag == '16-mixed' else 'bfloat16'} Automatic Mixed Precision (AMP)"
             )
-            device = self._accelerator_flag if self._accelerator_flag in ("cpu", "mps") else "cuda"
-            return MixedPrecision(self._precision_flag, device)
+            return MixedPrecision(self._precision_flag, self._autocast_device_type())
 
         raise RuntimeError("No precision set")
 
@@ -592,3 +606,17 @@ def _set_torch_flags(
     if deterministic:
         # https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
+
+def _first_accelerator_device(parallel_devices: Optional[list]) -> Optional[torch.device]:
+    """The first parallel device if it is a non-CPU ``torch.device``, otherwise ``None``."""
+    if parallel_devices and isinstance(parallel_devices[0], torch.device) and parallel_devices[0].type != "cpu":
+        return parallel_devices[0]
+    return None
+
+
+def _is_registered_subclass(accelerator_flag: Union[str, Accelerator], cls: type) -> bool:
+    """Whether ``accelerator_flag`` names a registered accelerator that subclasses ``cls``."""
+    if not isinstance(accelerator_flag, str) or accelerator_flag not in AcceleratorRegistry:
+        return False
+    return issubclass(AcceleratorRegistry[accelerator_flag]["accelerator"], cls)
