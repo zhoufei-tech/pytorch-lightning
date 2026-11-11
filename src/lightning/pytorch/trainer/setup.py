@@ -18,7 +18,7 @@ from typing import Optional, Union
 
 import lightning.pytorch as pl
 from lightning.fabric.utilities.warnings import PossibleUserWarning
-from lightning.pytorch.accelerators import CUDAAccelerator, MPSAccelerator, XLAAccelerator,NPUAccelerator
+from lightning.pytorch.accelerators import CUDAAccelerator, MPSAccelerator, TorchAccelerator, XLAAccelerator
 from lightning.pytorch.loggers.logger import DummyLogger
 from lightning.pytorch.profilers import (
     AdvancedProfiler,
@@ -166,8 +166,10 @@ def _log_device_info(trainer: "pl.Trainer") -> None:
     num_tpu_cores = trainer.num_devices if isinstance(trainer.accelerator, XLAAccelerator) else 0
     rank_zero_info(f"TPU available: {XLAAccelerator.is_available()}, using: {num_tpu_cores} TPU cores")
 
-    number_npu_cores = trainer.num_devices if isinstance(trainer.accelerator, NPUAccelerator) else 0
-    rank_zero_info(f"NPU available: {NPUAccelerator.is_available()}, using: {number_npu_cores} NPU cores")
+    if TorchAccelerator.is_available():
+        device_type = TorchAccelerator._require_device_type()
+        num_devices = trainer.num_devices if isinstance(trainer.accelerator, TorchAccelerator) else 0
+        rank_zero_info(f"{device_type.upper()} available: True, using: {num_devices} devices")
 
     if (
         CUDAAccelerator.is_available()
@@ -182,8 +184,13 @@ def _log_device_info(trainer: "pl.Trainer") -> None:
 
     if XLAAccelerator.is_available() and not isinstance(trainer.accelerator, XLAAccelerator):
         rank_zero_warn("TPU available but not used. You can set it by doing `Trainer(accelerator='tpu')`.")
-    if NPUAccelerator.is_available() and not isinstance(trainer.accelerator, NPUAccelerator):
-        rank_zero_warn("NPU available but not used. You can set it by doing `Trainer(accelerator='npu')`.")
+    if TorchAccelerator.is_available() and not isinstance(trainer.accelerator, TorchAccelerator):
+        rank_zero_warn(
+            f"{TorchAccelerator._require_device_type().upper()} available but not used. You can set it by doing"
+            f" `Trainer(accelerator='{TorchAccelerator.name()}')`.",
+            category=PossibleUserWarning,
+        )
+
 
 def _parse_time_interval_seconds(value: Union[str, timedelta, dict]) -> float:
     """Convert a time interval into seconds.
